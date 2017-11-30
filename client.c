@@ -34,9 +34,15 @@ int main()
     char buf[] = "Hello!\n";
     ssize_t written = send(sockfd, buf, strlen(buf), 0);
     if (written > 0)
-        printf("Successful\n");
+        printf("Successful write\n");
     else
         printf("Failed\n");
+    char buffer[BUFSIZE];
+    ssize_t read_bytes = read(sockfd, buf, BUFSIZE);
+    if (read_bytes > 0)
+        printf("Received data: %s\n", buffer);
+    else
+        printf("Error while reading\n");
     close(sockfd);
     return 0;
 }

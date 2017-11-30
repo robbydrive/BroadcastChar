@@ -9,11 +9,15 @@
 
 typedef struct sockaddr_in addr_struct;
 int BUFSIZE = 1024;
+int MESSAGESIZE = 1024;
 int MAXEVENTS = 1000;
 
-typedef struct {
+typedef struct msg message_node;
 
-} message_node;
+struct msg {
+    char *buffer;
+    message_node *next;
+};
 
 typedef struct {
     int writable;
@@ -21,12 +25,37 @@ typedef struct {
     int fd;
 } context;
 
-context * create_context(int sockfd)
+typedef struct context_node {
+    context *cptr;
+    struct context_node *next;
+} context_node;
+
+static context_node root_context;
+
+message_node* create_message()
+{
+    message_node *message = (message_node *)malloc(sizeof(message));
+    message->buffer = (char *)malloc(MESSAGESIZE * sizeof(char));
+    message->next = NULL;
+    return message;
+}
+
+context* create_context(int sockfd)
 {
     context *ptr = (context *)malloc(sizeof(context));
     ptr->writable = 0;
     ptr->message = NULL;
     ptr->fd = sockfd;
+    context_node *current = &root_context;
+    if (current->cptr == NULL)
+        current->cptr = ptr;
+    else
+    {
+        while (current->next != NULL)
+            current = current->next;
+        current->next = (context_node *)malloc(sizeof(context_node));
+        current->next->cptr = ptr;
+    }
     return ptr;
 }
 
@@ -56,6 +85,75 @@ int register_fd(int epfd, int fd)
     else
         printf("Created new connection\n");
     return errcode;
+}
+
+void flush_context(context *cptr)
+{
+    if (cptr->writable && cptr->message != NULL)
+    {
+        message_node *current = cptr->message, *parent;
+        while (current != NULL)
+        {
+            ssize_t sent = 0;
+            while ((sent = send(cptr->fd, cptr->message->buffer, MESSAGESIZE, 0)) != -1)
+            {
+                if (sent == 0)
+                    break;
+                printf("Message sent\n");
+            }
+            parent = current;
+            current = current->next;
+            free(parent->buffer);
+            free(parent);
+        }
+        cptr->message = NULL;
+        cptr->writable = 0;
+    }
+}
+
+void copy_message(message_node *root_message, int except_fd)
+{
+    context_node *current_context = &root_context;
+    while (current_context != NULL)
+    {
+        if (current_context->cptr->fd == except_fd)
+        {
+            current_context = current_context->next;
+            continue;
+        }
+        message_node *current_message = root_message, 
+                     **insert_to = &(current_context->cptr->message);
+        // Find place to insert new message_node
+        while (*insert_to != NULL)
+            if ((*insert_to)->next == NULL)
+                break;
+            else
+                insert_to = &(*insert_to)->next;
+
+        // Recreate message_node forward list with newly created references
+        message_node *new_message = NULL;
+        while (current_message != NULL)
+        {
+            new_message = (message_node *)malloc(sizeof(message_node));
+            if ((*insert_to) == NULL)
+                *insert_to = new_message;
+            else
+            {
+                (*insert_to)->next = new_message;
+                insert_to = &new_message;
+            }
+            new_message->buffer = (char *)malloc(MESSAGESIZE * sizeof(char));
+            memcpy(new_message->buffer, current_message->buffer, MESSAGESIZE);
+            new_message->next = NULL;
+            current_message = current_message->next;
+        }
+
+        // Send data immediately if socket is ready for writing
+        if (current_context->cptr->writable)
+            flush_context(current_context->cptr);
+
+        current_context = current_context->next;
+    }
 }
 
 int main()
@@ -101,11 +199,13 @@ int main()
         else if (nevents == -1)
             exit(1);
 
+        printf("%d events happened\n", nevents);
         for (int i = 0; i < nevents; ++i)
         {
             context *cptr = (context *)events[i].data.ptr;
             if (cptr->fd == listen_sock)
             {
+                printf("Listener branch\n");
                 struct sockaddr_in peer_addr;
                 socklen_t addr_size;
                 memset(&peer_addr, 0, sizeof(peer_addr));
@@ -114,40 +214,52 @@ int main()
             }
             else
             {
-                switch (events[i].events)
+                printf("Else branch\n");
+                if (events[i].events & EPOLLIN)
                 {
-                    case EPOLLIN:
-
+                        message_node *message = create_message();
+                        message_node *current = message;
+                        char buf[BUFSIZE];
+                        ssize_t read_bytes = 0;
+                        while ((read_bytes = read(cptr->fd, buf, BUFSIZE)) != -1)
+                        {
+                            memcpy(current->buffer, buf, read_bytes);
+                            current->next = create_message();
+                            current = current->next;
+                        }
+                        if (current == message)
+                        {
+                            printf("Error while reading from socket %d\n", cptr->fd);
+                            break;
+                        }
+                        printf("Data received: %s\n", message->buffer);
+                        copy_message(message, cptr->fd);
+                        message_node *parent = NULL;
+                        current = message;
+                        while (current != NULL)
+                        {
+                            parent = current;
+                            current = current->next;
+                            free(parent->buffer);
+                            free(parent);
+                        }
                         break;
-                    case EPOLLOUT:
+                }
 
+                else if (events[i].events & EPOLLOUT)
+                    {
+                        printf("Socket %d is ready to write\n", cptr->fd);
+                        cptr->writable = 1;
+                        flush_context(cptr);
                         break;
-                    default:
-                        printf("Strange event happened");
+                    }
+                else
+                {
+                        printf("Strange event happened\n");
                         break;
                 }
             }
         }
     }
-
-    /*
-    printf("Waiting connection\n");
-    errcode = listen(sockfd, 1);
-    if (errcode == -1)
-        printf("Listen failed\n");
-
-    addr_struct peer_addr;
-    socklen_t peer_addr_len = sizeof(peer_addr);
-    memset(&peer_addr, 0, sizeof(peer_addr));
-    int peer_fd = accept(sockfd, (struct sockaddr *)&peer_addr, &peer_addr_len);
-
-    char buf[BUFSIZE];
-    memset(buf, 0, BUFSIZE);
-    ssize_t received = recv(peer_fd, buf, BUFSIZE, 0);
-
-    write(1, (void *)buf, received);
-
-    close(sockfd);
-    */
     exit(0);
 }

@@ -30,7 +30,7 @@ typedef struct context_node {
     struct context_node *next;
 } context_node;
 
-static context_node root_context;
+static context_node *root_context = NULL;
 
 message_node* create_message()
 {
@@ -40,21 +40,28 @@ message_node* create_message()
     return message;
 }
 
-context* create_context(int sockfd)
+context* create_context(int sockfd, int is_listener)
 {
     context *ptr = (context *)malloc(sizeof(context));
     ptr->writable = 0;
     ptr->message = NULL;
     ptr->fd = sockfd;
-    context_node *current = &root_context;
-    if (current->cptr == NULL)
-        current->cptr = ptr;
+    if (is_listener)
+        return ptr;
+    context_node *current = root_context;
+    if (current == NULL)
+    {
+        root_context = (context_node *)malloc(sizeof(context_node));
+        root_context->cptr = ptr;
+        root_context->next = NULL;
+    }
     else
     {
         while (current->next != NULL)
             current = current->next;
         current->next = (context_node *)malloc(sizeof(context_node));
         current->next->cptr = ptr;
+        current->next->next = NULL;
     }
     return ptr;
 }
@@ -72,7 +79,8 @@ int register_fd(int epfd, int fd)
 {
     struct epoll_event event;
     event.events = EPOLLET | EPOLLIN | EPOLLOUT;
-    event.data.ptr = create_context(fd);
+    event.data.ptr = create_context(fd, 0);
+    ((context *)event.data.ptr)->writable = 1;
     int errcode = setnonblocking(fd);
     if (errcode == -1)
     {
@@ -89,13 +97,15 @@ int register_fd(int epfd, int fd)
 
 void flush_context(context *cptr)
 {
+    printf("Flushing...\n");
     if (cptr->writable && cptr->message != NULL)
     {
         message_node *current = cptr->message, *parent;
         while (current != NULL)
         {
+            printf("Sending data\n");
             ssize_t sent = 0;
-            while ((sent = send(cptr->fd, cptr->message->buffer, MESSAGESIZE, 0)) != -1)
+            while ((sent = send(cptr->fd, cptr->message->buffer, MESSAGESIZE, 0)) > 0)
             {
                 if (sent == 0)
                     break;
@@ -103,8 +113,10 @@ void flush_context(context *cptr)
             }
             parent = current;
             current = current->next;
+            printf("Freeing\n");
             free(parent->buffer);
             free(parent);
+            printf("Freed\n");
         }
         cptr->message = NULL;
         cptr->writable = 0;
@@ -113,11 +125,14 @@ void flush_context(context *cptr)
 
 void copy_message(message_node *root_message, int except_fd)
 {
-    context_node *current_context = &root_context;
+    printf("Copying message\n");
+    context_node *current_context = root_context;
     while (current_context != NULL)
     {
+        printf("Copying...\n");
         if (current_context->cptr->fd == except_fd)
         {
+            printf("Excepting fd\n");
             current_context = current_context->next;
             continue;
         }
@@ -152,6 +167,7 @@ void copy_message(message_node *root_message, int except_fd)
         if (current_context->cptr->writable)
             flush_context(current_context->cptr);
 
+        printf("Switching contexts...\n");
         current_context = current_context->next;
     }
 }
@@ -190,7 +206,7 @@ int main()
 
     struct epoll_event event, events[MAXEVENTS];
     event.events = EPOLLET | EPOLLIN;
-    event.data.ptr = create_context(listen_sock);
+    event.data.ptr = create_context(listen_sock, 1);
     errcode = epoll_ctl(epfd, EPOLL_CTL_ADD, listen_sock, &event);
     while (1)
     {
@@ -230,7 +246,6 @@ int main()
                         if (current == message)
                         {
                             printf("Error while reading from socket %d\n", cptr->fd);
-                            break;
                         }
                         printf("Data received: %s\n", message->buffer);
                         copy_message(message, cptr->fd);
@@ -246,17 +261,16 @@ int main()
                         break;
                 }
 
-                else if (events[i].events & EPOLLOUT)
+                if (events[i].events & EPOLLOUT)
                     {
                         printf("Socket %d is ready to write\n", cptr->fd);
                         cptr->writable = 1;
                         flush_context(cptr);
-                        break;
                     }
+
                 else
                 {
                         printf("Strange event happened\n");
-                        break;
                 }
             }
         }

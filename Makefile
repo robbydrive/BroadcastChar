@@ -1,7 +1,7 @@
 all: server client
 
 server:
-	gcc server.c -o server.out
+	gcc server.c -o server.out -ggdb
 
 client:
 	gcc client.c -o client.out

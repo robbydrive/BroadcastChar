@@ -3,15 +3,18 @@
 typedef struct sockaddr_in addr_struct;
 int BUFSIZE = 1024;
 
-int main()
+int main(int argc, char *argv[])
 {
+    int port = 51001;
+    if (argc == 2)
+        port = atoi(argv[1]);
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     addr_struct addr, peer_addr;
     memset(&addr, 0, sizeof(addr));
     memset(&peer_addr, 0, sizeof(peer_addr));
     addr.sin_family = AF_INET;
     inet_aton("127.0.0.1", &addr.sin_addr);
-    addr.sin_port = 51001;
+    addr.sin_port = port;
     int errcode = bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
     if (errcode == -1)
     {

@@ -1,11 +1,5 @@
 #include "headers.h"
-/*
- * EPOLLIN - вычитывать, пока read не вернёт -1 и EWOULDBLOCK
- * Заводить циклобуфер для каждого клиента (или связный список)
- * EPOLLOUT - писать в сокет из циклобуфера, пока send != -1 && errno != EWOULDBLOCK
- * Заводить в контексте флаг writable (i.e.), менять его только при полной отправке
- * Хранить в контексте также id сокета
- */
+#include "logger.h"
 
 typedef struct sockaddr_in addr_struct;
 int BUFSIZE = 1024;
@@ -156,12 +150,13 @@ void flush_context(context *cptr)
             printf("Sending data\n");
             ssize_t sent = 0,
                     total_sent = 0;
-            while ((sent = send(cptr->fd, cptr->message->buffer, MESSAGESIZE, 0)) > 0)
+            while ((sent = send(cptr->fd, current->buffer, MESSAGESIZE, 0)) > 0)
             {
-                if ((total_sent += sent) == 0 || total_sent == MESSAGESIZE)
+                if ((total_sent += sent) >= MESSAGESIZE)
                     break;
                 printf("Message sent\n");
             }
+            log_message_sending(cptr->fd, current->buffer, BUFSIZE);
             parent = current;
             current = current->next;
             printf("Freeing\n");
@@ -226,6 +221,9 @@ void copy_message(message_node *root_message, int except_fd)
 
 int main()
 {
+    if (logger_init("server.log") == -1)
+        printf("Failed to setup logger\n");
+
     int listen_sock = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     addr_struct addr;
     memset(&addr, 0, sizeof(addr));
@@ -312,6 +310,7 @@ int main()
                         parent = current;
                         current->next = create_message();
                         current = current->next;
+                        log_message_receival(cptr->fd, parent->buffer, BUFSIZE);
                     }
                     if (parent != NULL)
                     {

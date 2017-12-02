@@ -1,10 +1,13 @@
 all: server client
 
-server:
-	gcc server.c -o server.out -ggdb
+logger:
+	gcc logger.c -c
 
-client:
-	gcc client.c -o client.out
+server: logger
+	gcc server.c logger.o -o server.out -ggdb
+
+client: logger
+	gcc client.c logger.o -o client.out
 
 clean:
-	rm server.out client.out
+	rm server.out client.out logger.o

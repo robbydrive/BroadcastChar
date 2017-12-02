@@ -109,60 +109,56 @@ int register_fd(int epfd, int fd)
     struct epoll_event event;
     event.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
     event.data.ptr = create_context(fd, 0);
-    ((context *)event.data.ptr)->writable = 1;
     int errcode = setnonblocking(fd);
     if (errcode == -1)
-    {
-        printf("Failed to set fd %d nonblocking\n", fd);
-        exit(1);
-    }
+        log_debug("Failed to set fd %d nonblocking\n", fd);
     errcode = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &event);
     if (errcode == -1)
-        printf("Failed registering new connection\n");
+        log_debug("Failed registering new connection\n");
     else
-        printf("Created new connection\n");
+        log_debug("Created new connection\n");
     return errcode;
 }
 
 int unregister_fd(int epfd, int delete_fd)
 {
-    printf("Unregistering %d socket...\n", delete_fd);
+    log_debug("Unregistering %d socket...\n", delete_fd);
     delete_context(delete_fd);
     int errcode = 0;
     if ((errcode = epoll_ctl(epfd, EPOLL_CTL_DEL, delete_fd, NULL)) != 0)
     {
-        printf("Failed to remove socket %d from epoll instance %d\n", delete_fd, epfd);
+        log_debug("Failed to remove socket %d from epoll instance %d\n", delete_fd, epfd);
         return errcode;
     }
     if ((errcode = close(delete_fd)) != 0)
-        printf("Failed to close socket %d\n", delete_fd);
+        log_debug("Failed to close socket %d\n", delete_fd);
     return errcode;
 }
 
 void flush_context(context *cptr)
 {
-    printf("Flushing...\n");
+    log_debug("Flushing...\n");
     if (cptr->writable && cptr->message != NULL)
     {
         message_node *current = cptr->message, *parent;
         while (current != NULL)
         {
-            printf("Sending data\n");
+            log_debug("Sending data\n");
             ssize_t sent = 0,
                     total_sent = 0;
             while ((sent = send(cptr->fd, current->buffer, MESSAGESIZE, 0)) > 0)
             {
                 if ((total_sent += sent) >= MESSAGESIZE)
                     break;
-                printf("Message sent\n");
+                log_debug("Message sent\n");
             }
             log_message_sending(cptr->fd, current->buffer, BUFSIZE);
             parent = current;
             current = current->next;
-            printf("Freeing\n");
+            log_debug("Freeing\n");
             free(parent->buffer);
             free(parent);
-            printf("Freed\n");
+            log_debug("Freed\n");
         }
         cptr->message = NULL;
         cptr->writable = 0;
@@ -171,14 +167,14 @@ void flush_context(context *cptr)
 
 void copy_message(message_node *root_message, int except_fd)
 {
-    printf("Copy message call\n");
+    log_debug("Copy message call\n");
     context_node *current_context = root_context;
     while (current_context != NULL)
     {
-        printf("Copying...\n");
+        log_debug("Copying...\n");
         if (current_context->cptr->fd == except_fd)
         {
-            printf("Excepting fd\n");
+            log_debug("Excepting fd\n");
             current_context = current_context->next;
             continue;
         }
@@ -195,7 +191,7 @@ void copy_message(message_node *root_message, int except_fd)
         message_node *new_message = NULL;
         while (current_message != NULL)
         {
-            printf("Copying message: %s\n", current_message->buffer);
+            log_debug("Copying message: %s\n", current_message->buffer);
             new_message = (message_node *)malloc(sizeof(message_node));
             if ((*insert_to) == NULL)
                 *insert_to = new_message;
@@ -214,15 +210,17 @@ void copy_message(message_node *root_message, int except_fd)
         if (current_context->cptr->writable)
             flush_context(current_context->cptr);
 
-        printf("Switching contexts...\n");
+        log_debug("Switching contexts...\n");
         current_context = current_context->next;
     }
 }
 
 int main()
 {
+    if (logger_set_debug(NULL, STDOUT_FILENO) == -1)
+        write(1, "Failed to set debug", 30);
     if (logger_init("server.log") == -1)
-        printf("Failed to setup logger\n");
+        log_debug("Failed to setup logger\n");
 
     int listen_sock = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     addr_struct addr;
@@ -233,20 +231,20 @@ int main()
     int errcode = bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr));
     if (errcode == -1)
     {
-        printf("Bind failure");
+        log_debug("Bind failure");
         exit(1);
     }
     else
     {
-        printf("Bind ok\n");
-        printf("%s\n", inet_ntoa(addr.sin_addr));
-        printf("%d\n", addr.sin_port);
+        log_debug("Bind ok\n");
+        log_debug("%s\n", inet_ntoa(addr.sin_addr));
+        log_debug("%d\n", addr.sin_port);
     }
 
     errcode = listen(listen_sock, 10);
     if (errcode == -1)
     {
-        printf("Listen failed");
+        log_debug("Listen failed");
         exit(1);
     }
 
@@ -265,14 +263,14 @@ int main()
         else if (nevents == -1)
             exit(1);
 
-        printf("%d events happened\n", nevents);
+        log_debug("%d events happened\n", nevents);
         for (int i = 0; i < nevents; ++i)
         {
             context *cptr = (context *)events[i].data.ptr;
-            printf("\nNEW EVENT\nSocket fd: %d\n", cptr->fd);
+            log_debug("\nNEW EVENT\nSocket fd: %d\n", cptr->fd);
             if (cptr->fd == listen_sock)
             {
-                printf("Listener branch\n");
+                log_debug("Listener branch\n");
                 struct sockaddr_in peer_addr;
                 socklen_t addr_size;
                 memset(&peer_addr, 0, sizeof(peer_addr));
@@ -281,7 +279,7 @@ int main()
             }
             else
             {
-                printf("Else branch\n");
+                log_debug("Else branch\n");
                 if (events[i].events & EPOLLRDHUP)
                 {
                     flush_context(cptr);
@@ -320,14 +318,14 @@ int main()
                     }
                     else
                     {
-                        printf("Error while reading from socket %d\nEvents received: %d\n", cptr->fd, (int)events[i].events);
+                        log_debug("Error while reading from socket %d\nEvents received: %d\n", cptr->fd, (int)events[i].events);
                         free(message->buffer);
                         free(message);
                         message = NULL;
                     }
                     if (message != NULL)
                     {
-                        printf("Data received: %s\n", message->buffer);
+                        log_debug("Data received: %s\n", message->buffer);
                         copy_message(message, cptr->fd);
                         current = message;
                         while (current != NULL)
@@ -342,7 +340,7 @@ int main()
 
                 if (events[i].events & EPOLLOUT)
                 {
-                    printf("Socket %d is ready to write\n", cptr->fd);
+                    log_debug("Socket %d is ready to write\n", cptr->fd);
                     cptr->writable = 1;
                     flush_context(cptr);
                 }

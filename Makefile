@@ -1,7 +1,7 @@
 all: server client
 
 logger:
-	gcc logger.c -c
+	gcc logger.c -c -ggdb
 
 server: logger
 	gcc server.c logger.o -o server.out -ggdb

@@ -41,11 +41,13 @@ int main(int argc, char *argv[])
     else
         printf("Failed\n");
     char buffer[BUFSIZE];
-    ssize_t read_bytes = read(sockfd, buf, BUFSIZE);
+    ssize_t read_bytes = read(sockfd, buffer, BUFSIZE);
     if (read_bytes > 0)
-        printf("Received data: %s\n", buffer);
+        printf("Received %ld bytes: %s\n", read_bytes, buffer);
     else
         printf("Error while reading\n");
+    shutdown(sockfd, SHUT_WR);
+    read(sockfd, buffer, BUFSIZE);
     close(sockfd);
     return 0;
 }
